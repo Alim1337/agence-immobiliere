@@ -1,0 +1,230 @@
+// Schéma de base — vitrine + CRM
+// Lance `npx prisma generate` puis `npx prisma db push` une fois DATABASE_URL renseigné (Neon).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Rôles & utilisateurs internes ---------------------------------------
+
+enum Role {
+  ADMIN // directeur d'agence : accès total
+  AGENT // agent commercial : voit tout, modifie ses biens/leads uniquement
+  ASSISTANT // gère les biens/documents, pas le pipeline commercial
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  phone        String?
+  role         Role     @default(AGENT)
+  photoUrl     String?
+  passwordHash String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  properties   Property[]     @relation("AgentProperties")
+  leads        Lead[]         @relation("AssignedLeads")
+  interactions Interaction[]
+  appointments Appointment[]
+  tasks        Task[]
+  articles     Article[]
+}
+
+// --- Biens ------------------------------------------------------------
+
+enum PropertyKind {
+  VENTE
+  LOCATION
+  NEUF
+}
+
+enum PropertyCategory {
+  APPARTEMENT
+  MAISON
+  TERRAIN
+  LOCAL_COMMERCIAL
+}
+
+enum PropertyStatus {
+  DISPONIBLE
+  SOUS_OFFRE
+  VENDU
+  LOUE
+}
+
+model Property {
+  id          String           @id @default(cuid())
+  reference   String           @unique
+  title       String
+  kind        PropertyKind
+  category    PropertyCategory
+  status      PropertyStatus   @default(DISPONIBLE)
+  price       Int // en euros (centimes si besoin de précision)
+  city        String
+  postalCode  String
+  surface     Float
+  rooms       Int
+  bedrooms    Int              @default(0)
+  dpe         String? // A à G
+  description String           @db.Text
+  published   Boolean          @default(false) // visible sur le site public
+
+  // Coordonnées du propriétaire (pour la génération du mandat, jamais affichées publiquement)
+  ownerName  String?
+  ownerPhone String?
+  ownerEmail String?
+
+  // Position sur la carte (saisie manuelle par l'agent — ex: clic droit sur Google Maps > Copier les coordonnées)
+  latitude  Float?
+  longitude Float?
+
+  agentId String
+  agent   User   @relation("AgentProperties", fields: [agentId], references: [id])
+
+  images       PropertyImage[]
+  leads        Lead[]
+  appointments Appointment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PropertyImage {
+  id         String   @id @default(cuid())
+  url        String
+  position   Int      @default(0)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+}
+
+// --- CRM : leads / prospects -------------------------------------------
+
+enum LeadSource {
+  SITE_WEB
+  TELEPHONE
+  PORTAIL_ANNONCE // Leboncoin, SeLoger, etc.
+  RECOMMANDATION
+  AUTRE
+}
+
+enum PipelineStage {
+  NOUVEAU // vient d'arriver, en file d'attente non assignée
+  CONTACTE
+  QUALIFIE
+  VISITE_PLANIFIEE
+  OFFRE
+  SIGNE
+  PERDU
+}
+
+model Lead {
+  id      String        @id @default(cuid())
+  name    String
+  email   String?
+  phone   String?
+  source  LeadSource    @default(SITE_WEB)
+  stage   PipelineStage @default(NOUVEAU)
+  message String?       @db.Text
+
+  // Critères de recherche du prospect
+  budgetMin Int?
+  budgetMax Int?
+  city      String?
+
+  // NOUVEAU = file d'attente, non assigné. L'admin assigne manuellement.
+  assignedToId String?
+  assignedTo   User?   @relation("AssignedLeads", fields: [assignedToId], references: [id])
+
+  propertyId String? // bien d'origine (annonce ayant généré le lead), si applicable
+  property   Property? @relation(fields: [propertyId], references: [id])
+
+  interactions Interaction[]
+  appointments Appointment[]
+  tasks        Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum InteractionType {
+  APPEL
+  EMAIL
+  NOTE
+  VISITE
+}
+
+model Interaction {
+  id        String          @id @default(cuid())
+  type      InteractionType
+  content   String          @db.Text
+  leadId    String
+  lead      Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User            @relation(fields: [userId], references: [id])
+  createdAt DateTime        @default(now())
+}
+
+model Appointment {
+  id         String   @id @default(cuid())
+  date       DateTime
+  leadId     String
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id])
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  notes      String?
+  createdAt  DateTime @default(now())
+}
+
+model Task {
+  id        String   @id @default(cuid())
+  title     String
+  dueDate   DateTime
+  done      Boolean  @default(false)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+// --- Paramètres de l'agence (singleton) -----------------------------------
+
+model AgencySettings {
+  id          String   @id @default("singleton")
+  name        String   @default("Maison & Fils")
+  tagline     String   @default("Alger & sa région — depuis 1998")
+  addressLine String   @default("Cité des Annassers")
+  city        String   @default("Alger")
+  postalCode  String   @default("16035")
+  phone       String   @default("021 60 00 00")
+  whatsapp    String   @default("213555000000")
+  email       String   @default("contact@maisonetfils.fr")
+  logoUrl     String?
+  updatedAt   DateTime @updatedAt
+}
+
+// --- Blog / actualités ---------------------------------------------------
+
+model Article {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  excerpt     String
+  content     String   @db.Text
+  category    String
+  published   Boolean  @default(true)
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id])
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
