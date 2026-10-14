@@ -23,7 +23,7 @@ export async function GET(
     <MandatDocument property={property} agent={property.agent} />
   );
 
-  return new NextResponse(buffer, {
+ return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="mandat-${property.reference}.pdf"`,
